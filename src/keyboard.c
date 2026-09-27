@@ -1,6 +1,7 @@
 #include "keyboard.h"
 #include "ports.h"
 #include "terminal.h"
+#include "shell.h"
 
 static bool shift_pressed = false;
 static bool alt_pressed = false;
@@ -35,23 +36,6 @@ const char scancode_to_char_shifted[MAX_SCANCODE] = {
 };
 
 
-// Function pointer array for special key handlers
-void (*key_handlers[MAX_SCANCODE])(void) = { 0 };
-
-// Cursor movement handlers
-static void move_cursor_up(void)    { if (terminal.row > 0) terminal.row--; update_cursor(); }
-static void move_cursor_down(void)  { if (terminal.row < VGA_HEIGHT - 1) terminal.row++; update_cursor(); }
-static void move_cursor_left(void)  { if (terminal.column > 0) terminal.column--; update_cursor(); }
-static void move_cursor_right(void) { if (terminal.column < VGA_WIDTH - 1) terminal.column++; update_cursor(); }
-
-// Initialize the key handler table
-void init_key_handlers() {
-    key_handlers[SC_UP] = move_cursor_up;
-    key_handlers[SC_DOWN] = move_cursor_down;
-    key_handlers[SC_LEFT] = move_cursor_left;
-    key_handlers[SC_RIGHT] = move_cursor_right;
-}
-
 // Process scancode input
 void handle_scancode(uint8_t scancode) {
     if (scancode == SC_LSHIFT || scancode == SC_RSHIFT) { 
@@ -63,15 +47,12 @@ void handle_scancode(uint8_t scancode) {
     } else if (scancode == SC_ALT_RELEASE) { 
         alt_pressed = false;
     } else if (alt_pressed && scancode >= SC_F1 && scancode <= SC_F9) { 
-        switch_screen(scancode - SC_F1);
+        switch_screen((uint8_t)(scancode - SC_F1));
+        shell_on_screen_switch();
     } else if (scancode < MAX_SCANCODE) {
-        if (key_handlers[scancode]) {
-            key_handlers[scancode]();
-        } else {
-            char c = shift_pressed ? scancode_to_char_shifted[scancode] : scancode_to_char_normal[scancode];
-            if (c) {
-                terminal_putchar(c);
-            }
+        char c = shift_pressed ? scancode_to_char_shifted[scancode] : scancode_to_char_normal[scancode];
+        if (c) {
+            shell_input(c);
         }
     }
 }

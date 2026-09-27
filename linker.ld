@@ -17,6 +17,10 @@ SECTIONS
 	   memory which is verified to be available by the firmware, in order to
 	   work around this issue. This does not use that feature, so 2M was
 	   chosen as a safer option than the traditional 1M. */
+	/* The subject requires the GDT at physical address 0x800. It is built
+	   there at run time by gdt_init(); this symbol only names the address. */
+	gdt_phys = 0x00000800;
+
 	. = 2M;
 
 	/* First put the multiboot header, as it is required to be put very early
@@ -26,18 +30,21 @@ SECTIONS
 	{
 		*(.multiboot)
 		*(.text)
+		*(.text.*)
 	}
 
 	/* Read-only data. */
 	.rodata BLOCK(4K) : ALIGN(4K)
 	{
 		*(.rodata)
+		*(.rodata.*)
 	}
 
 	/* Read-write data (initialized) */
 	.data BLOCK(4K) : ALIGN(4K)
 	{
 		*(.data)
+		*(.data.*)
 	}
 
 	/* Read-write data (uninitialized) and stack */
@@ -45,6 +52,7 @@ SECTIONS
 	{
 		*(COMMON)
 		*(.bss)
+		*(.bss.*)
 	}
 
 	/* The compiler may produce other sections, by default it will put them in

@@ -18,8 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libisl-dev \
     wget \
     make \
-	&& mkdir -p tests \
     ca-certificates \
+    grub-pc-bin \
+    xorriso \
+    mtools \
     && mkdir -p /src \
     && cd /src \
     # Build binutils
