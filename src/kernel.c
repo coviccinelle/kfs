@@ -2,30 +2,31 @@
 #include "keyboard.h"
 #include "gdt.h"
 #include "printk.h"
+#include "stack.h"
+#include "shell.h"
 
-/* Check if the compiler thinks you are targeting the wrong operating system. */
-#if defined(__linux__)
-#error "You are not using a cross-compiler, you will most certainly run into trouble"
-#endif
-
-/* This tutorial will only work for the 32-bit ix86 targets. */
+/* The kernel only runs on 32-bit x86 (i386). */
 #if !defined(__i386__)
-#error "This tutorial needs to be compiled with a ix86-elf compiler"
+#error "This kernel must be compiled for i386 (cross compiler or gcc -m32)"
 #endif
 
+#define MULTIBOOT_BOOTLOADER_MAGIC 0x2BADB002
 
-void kernel_main(void);
+void kernel_main(uint32_t magic, uint32_t mbi);
 
-void kernel_main(void) 
+void kernel_main(uint32_t magic, uint32_t mbi)
 {
   gdt_init();
   terminal_initialize();
-  update_cursor();
-  init_key_handlers();
 
-  printk("KFS_2 booted!\n");
-  printk("GDT base = %p, decimal = %d, hex = 0x%x\n", (void *)0x800, 2048, 2048);
-  
+  if (magic != MULTIBOOT_BOOTLOADER_MAGIC)
+    printk("warning: bad multiboot magic %08x\n", magic);
+  printk("KFS_2 booted, multiboot info at %p\n", (void *)mbi);
+
+  gdt_print();
+  print_kernel_stack();
+  shell_init();
+
   while (1)
   {
     poll_keyboard();

@@ -1,6 +1,6 @@
 #ifndef STDDEF_H
 #define STDDEF_H
 
-typedef unsigned long size_t;
+typedef unsigned int size_t;
 
 #endif

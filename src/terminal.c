@@ -45,24 +45,14 @@ void terminal_putchar(char c)
         terminal.column = 0;
         terminal.row++;
     } 
-    else if (c == '\b' && terminal.column > 0) { // Handle Backspace
-		terminal.column--; // Move cursor left
-		// Shift all characters in the current row to the left by one position
-		for (size_t x = terminal.column; x < VGA_WIDTH - 1; x++) {
-			uint16_t next_char = terminal_getentryat(x + 1, terminal.row);
-			terminal_putentryat((char)(next_char & 0xFF), terminal.color, x, terminal.row);
-		}
-		// Clear the last character of the current line
-		terminal_putentryat(' ', terminal.color, VGA_WIDTH - 1, terminal.row);
-
-		if (terminal.column == 0) {
-			terminal.row--;
-			size_t last_col = VGA_WIDTH - 1; // Move to end of previous line
-			while (last_col > 0 && (terminal_getentryat(last_col, terminal.row) & 0xFF) == ' ') {
-				last_col--;
-			}
-			terminal.column = last_col + 1;
-		}
+    else if (c == '\b') { // Handle Backspace: erase the previous cell
+        if (terminal.column > 0) {
+            terminal.column--;
+        } else if (terminal.row > 1) { // never go back into the header row
+            terminal.row--;
+            terminal.column = VGA_WIDTH - 1;
+        }
+        terminal_putentryat(' ', terminal.color, terminal.column, terminal.row);
     } 
     else { // Print normal character
 		terminal_putentryat(c, terminal.color, terminal.column, terminal.row); // Insert new character
@@ -74,11 +64,10 @@ void terminal_putchar(char c)
         terminal.row++;
     }
 
-    if (terminal.row >= VGA_HEIGHT) { // Scroll screen if needed
-        for (size_t y = 1; y < VGA_HEIGHT; y++) {
+    if (terminal.row >= VGA_HEIGHT) { // Scroll screen if needed, keeping the header row
+        for (size_t y = 2; y < VGA_HEIGHT; y++) {
             for (size_t x = 0; x < VGA_WIDTH; x++) {
-                uint16_t entry = terminal_getentryat(x, y); // Get previous row
-                terminal_putentryat((char)entry, terminal.color, x, y - 1); // Move up
+                terminal.buffer[(y - 1) * VGA_WIDTH + x] = terminal_getentryat(x, y); // Move up
             }
         }
 
@@ -175,6 +164,17 @@ void terminal_initialize(void) {
     }
   }
   terminal_render_header();
+}
+
+void terminal_clear(void) {
+  for (size_t y = 1; y < VGA_HEIGHT; y++) {
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+      terminal_putentryat(' ', terminal.color, x, y);
+    }
+  }
+  terminal.row = 1;
+  terminal.column = 0;
+  update_cursor();
 }
 
 void update_cursor() {

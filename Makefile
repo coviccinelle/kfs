@@ -1,65 +1,85 @@
-TARGET=i686-elf
-CC=$(TARGET)-gcc
+# Use the i386 cross toolchain if installed (`make TARGET=i686-elf` to pick
+# another prefix), otherwise the host gcc/as/ld in 32-bit mode: the flags
+# below keep the kernel free of any host header or library.
+TARGET   ?= i386-elf
+ifneq ($(shell command -v $(TARGET)-gcc 2>/dev/null),)
+CC       := $(TARGET)-gcc
+AS       := $(TARGET)-as
+LD       := $(TARGET)-ld
+else
+CC       := gcc -m32
+AS       := as --32
+LD       := ld -m elf_i386
+endif
 
-PROJDIRS := src includes tests
+# grub-mkrescue (Debian/Ubuntu) or grub2-mkrescue (Fedora/Arch)
+MKRESCUE ?= $(shell command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue 2>/dev/null)
+GRUB_DIR ?= /usr/lib/grub/i386-pc
 
-SRCFILES := $(shell find $(PROJDIRS) -type f -name "*.c")
-HDRFILES := $(shell find $(PROJDIRS) -type f -name "*.h")
+SRCFILES := $(wildcard src/*.c)
+HDRFILES := $(wildcard includes/*.h)
+OBJFILES := $(patsubst src/%.c,%.o,$(SRCFILES))
+DEPFILES := $(OBJFILES:.o=.d)
 
-OBJFILES := $(patsubst src/%,%, $(patsubst %.c,%.o, $(SRCFILES)))
-TSTFILES := $(patsubst %.c,%_t,$(SRCFILES))
-
-DEPFILES    := $(patsubst %.c,%.d,$(SRCFILES))
-TSTDEPFILES := $(patsubst %,%.d,$(TSTFILES))
-
-ALLFILES := $(SRCFILES) $(HDRFILES) $(AUXFILES)
+KERNEL := myos.bin
+ISO    := kfs.iso
 
 WARNINGS := -Wall -Wextra -pedantic -Wshadow -Wpointer-arith -Wcast-align \
             -Wwrite-strings -Wmissing-prototypes -Wmissing-declarations \
             -Wredundant-decls -Wnested-externs -Winline -Wno-long-long \
             -Wconversion -Wstrict-prototypes
 
-CFLAGS := -I ./includes/ -g -ffreestanding -O2 -std=gnu99 $(WARNINGS)
+# Freestanding kernel: no host headers/libs, no builtins, no stack canary,
+# and keep EBP as frame pointer so the stack tracer can walk the frames.
+# -fno-pie: host compilers build position-independent code by default,
+# a kernel loaded at a fixed address must not.
+CFLAGS := -I ./includes/ -g -std=gnu99 -O2 -march=i386 -ffreestanding \
+          -fno-builtin -fno-stack-protector -fno-exceptions -fno-pie \
+          -fno-omit-frame-pointer -fno-asynchronous-unwind-tables \
+          -nostdlib -nodefaultlibs -MMD $(WARNINGS)
+
+# ld called directly: only our objects and our linker script, nothing else
+LDFLAGS := -T linker.ld -nostdlib
+
+# BIOS-only GRUB image with the two modules we need: keeps the ISO < 1 MB
+GRUB_FLAGS := -d $(GRUB_DIR) --install-modules="multiboot normal" \
+              --fonts="" --locales="" --themes=""
+
+all: $(ISO)
+
+$(KERNEL): boot.o $(OBJFILES) linker.ld
+	$(LD) $(LDFLAGS) -o $@ boot.o $(OBJFILES)
 
 %.o: src/%.c Makefile
 	$(CC) $(CFLAGS) -c $< -o $@
 
-myos.bin: boot.o $(OBJFILES)
-	$(CC) -T linker.ld -o myos.bin -ffreestanding -O2 -nostdlib boot.o $(OBJFILES) -lgcc
-
 boot.o: boot.s
-	$(TARGET)-as ./boot.s -o boot.o
+	$(AS) $< -o $@
 
-myos.iso: myos.bin grub.cfg
+$(ISO): $(KERNEL) grub.cfg
 	mkdir -p isodir/boot/grub
-	cp myos.bin isodir/boot/myos.bin
+	cp $(KERNEL) isodir/boot/$(KERNEL)
 	cp grub.cfg isodir/boot/grub/grub.cfg
-	grub-mkrescue -o myos.iso isodir
-
-all: myos.bin
-# TODO: docker build -t kfs . -> build docker image
-# docker-compose up -d 
-# docker exec -it kfs bash
-# TODO: mkdir -p tests 
+	$(MKRESCUE) $(GRUB_FLAGS) -o $@ isodir
 
 clean:
-	-@$(RM) $(wildcard $(OBJFILES) $(DEPFILES) $(TSTFILES) pdclib.a pdclib.tgz)
-	$(RM) boot.o 
-	$(RM) $(OBJFILES)
-	$(RM) myos.bin
-	$(RM) myos.iso
+	$(RM) boot.o $(OBJFILES) $(DEPFILES)
+	$(RM) -r isodir
 
-re: clean all
+fclean: clean
+	$(RM) $(KERNEL) $(ISO)
 
-start: myos.bin
-	qemu-system-i386 -kernel myos.bin
+re: fclean all
 
-start-iso: myos.iso
-	qemu-system-i386 -cdrom myos.iso
+run: $(ISO)
+	qemu-system-i386 -cdrom $(ISO) -monitor stdio
 
-todolist:
-	-@for file in $(ALLFILES:Makefile=); do fgrep -H -e TODO -e FIXME $$file; done; true
+run-kernel: $(KERNEL)
+	qemu-system-i386 -kernel $(KERNEL) -monitor stdio
+
+debug: $(ISO)
+	qemu-system-i386 -cdrom $(ISO) -s -S -monitor stdio
 
 -include $(DEPFILES)
 
-.PHONY: boot.o all clean re start start-iso
+.PHONY: all clean fclean re run run-kernel debug

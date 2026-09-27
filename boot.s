@@ -32,6 +32,8 @@ undefined behavior.
 */
 .section .bss
 .align 16
+.global stack_bottom
+.global stack_top
 stack_bottom:
 .skip 16384 # 16 KiB
 stack_top:
@@ -66,6 +68,12 @@ _start:
 	mov $stack_top, %esp
 
 	/*
+	EBP = 0 marks the outermost frame: the stack tracer stops walking the
+	saved-EBP chain when it reaches it.
+	*/
+	xor %ebp, %ebp
+
+	/*
 	This is a good place to initialize crucial processor state before the
 	high-level kernel is entered. It's best to minimize the early
 	environment where crucial features are offline. Note that the
@@ -81,9 +89,13 @@ _start:
 	aligned at the time of the call instruction (which afterwards pushes
 	the return pointer of size 4 bytes). The stack was originally 16-byte
 	aligned above and we've pushed a multiple of 16 bytes to the
-	stack since (pushed 0 bytes so far), so the alignment has thus been
-	preserved and the call is well defined.
+	stack since (8 bytes of padding + 2 pushes = 16 bytes), so the alignment
+	has thus been preserved and the call is well defined.
+	kernel_main(magic, mbi) receives what GRUB left in EAX and EBX.
 	*/
+	sub $8, %esp        /* padding: keep the stack 16-byte aligned */
+	push %ebx           /* multiboot information structure */
+	push %eax           /* multiboot magic (0x2BADB002) */
 	call kernel_main
 
 	/*
@@ -107,3 +119,29 @@ Set the size of the _start symbol to the current location '.' minus its start.
 This is useful when debugging or when you implement call tracing.
 */
 .size _start, . - _start
+
+/*
+void gdt_flush(const gdt_ptr_t *ptr)
+Load the new GDT into GDTR, then reload every segment register: the CPU keeps
+a hidden copy of each descriptor (taken from GRUB's GDT) and only refreshes it
+when the register is written. Data registers can be loaded with mov; CS can
+only change through a far jump (or far call/return), hence the ljmp.
+*/
+.global gdt_flush
+.type gdt_flush, @function
+gdt_flush:
+	mov 4(%esp), %eax   /* first argument: address of the 6-byte gdt_ptr */
+	lgdt (%eax)
+	mov $0x10, %ax      /* kernel data selector: index 2, GDT, RPL 0 */
+	mov %ax, %ds
+	mov %ax, %es
+	mov %ax, %fs
+	mov %ax, %gs
+	mov $0x18, %ax      /* kernel stack selector: index 3, GDT, RPL 0 */
+	mov %ax, %ss
+	ljmp $0x08, $1f     /* kernel code selector: reloads CS */
+1:	ret
+.size gdt_flush, . - gdt_flush
+
+/* No executable stack needed (silences a linker warning). */
+.section .note.GNU-stack, "", @progbits

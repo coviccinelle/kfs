@@ -5,6 +5,7 @@
 
 #define KEYBOARD_STATUS_PORT  0x64
 #define KEYBOARD_DATA_PORT    0x60
+#define KEYBOARD_CTRL_PORT    0x64 /* 8042 command register (write) */
 
 #define MAX_SCANCODE 128
 
@@ -25,7 +26,6 @@ enum {
   SC_F9 = 0x43
 };
 
-void init_key_handlers(void);
 void poll_keyboard(void);
 void handle_scancode(uint8_t scancode);
 
