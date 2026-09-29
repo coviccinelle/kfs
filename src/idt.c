@@ -5,7 +5,8 @@
 #include "signal.h"
 #include "string.h"
 
-/* 256 gates; unused ones stay "not present" and would raise a #GP. */
+/* 256 gates, all present: vectors without a C handler reach
+   interrupt_dispatch() and are reported there. */
 static struct idt_entry idt[IDT_ENTRIES] __attribute__((aligned(8)));
 static struct idt_ptr idtp;
 
@@ -13,8 +14,7 @@ static struct idt_ptr idtp;
 static isr_t handlers[IDT_ENTRIES];
 
 /* Stub addresses exported by isr_stubs.s */
-extern const uint32_t isr_stub_table[48];
-extern void isr128(void);
+extern const uint32_t isr_stub_table[IDT_ENTRIES];
 
 static const char *const exception_names[32] = {
     "Division by Zero", "Debug", "Non Maskable Interrupt", "Breakpoint",
@@ -49,11 +49,13 @@ void register_interrupt_handler(uint8_t num, isr_t handler)
     handlers[num] = handler;
 }
 
-/* #BP is a trap: the CPU resumes after int3, so it is safe to return. */
+/* #BP is a trap: the CPU resumes after int3, so it is safe to return.
+   SIGTRAP is only scheduled: its callback runs later from the main loop,
+   not inside the exception with interrupts off. */
 static void breakpoint_handler(struct regs *r)
 {
     printk("breakpoint at eip=%08x\n", r->eip);
-    signal_raise(SIGTRAP);
+    signal_schedule(SIGTRAP);
 }
 
 /* Every fault ends here unless a handler was registered for it. */
@@ -89,11 +91,11 @@ void idt_init(void)
     memset(idt, 0, sizeof idt);
     memset(handlers, 0, sizeof handlers);
 
-    /* Exceptions 0-31 and IRQs 32-47: kernel only (DPL0). */
-    for (uint8_t i = 0; i < 48; i++)
-        idt_set_gate(i, isr_stub_table[i], 0x08, IDT_GATE_KERNEL);
-    /* int 0x80 may be called from ring 3 later (DPL3). */
-    idt_set_gate(SYSCALL_VECTOR, (uint32_t)isr128, 0x08, IDT_GATE_USER);
+    /* Every vector gets a stub: kernel only (DPL0), except int 0x80
+       which may be called from ring 3 later (DPL3). */
+    for (int i = 0; i < IDT_ENTRIES; i++)
+        idt_set_gate((uint8_t)i, isr_stub_table[i], 0x08,
+                     i == SYSCALL_VECTOR ? IDT_GATE_USER : IDT_GATE_KERNEL);
 
     /* Move IRQs away from the CPU exception vectors, mask them all. */
     pic_remap(IRQ(0), IRQ(8));
@@ -115,12 +117,23 @@ void idt_print(void)
            r.base, r.limit, ((uint32_t)r.limit + 1) / 8);
 
     const struct idt_entry *e = (const struct idt_entry *)r.base;
-    for (uint32_t i = 0; i * 8 < (uint32_t)r.limit + 1; i++) {
-        if (!(e[i].type_attr & 0x80))
+    uint32_t count = ((uint32_t)r.limit + 1) / 8;
+    uint32_t present = 0;
+    for (uint32_t i = 0; i < count; i++)
+        if (e[i].type_attr & 0x80)
+            present++;
+    printk("%u present gates, selector %04x\n", present, e[0].selector);
+
+    /* 256 lines would not fit on screen: show the gates of interest, i.e.
+       a few exceptions and every vector with a C handler. */
+    printk("vec  offset    attr  handler\n");
+    for (uint32_t i = 0; i < count; i++) {
+        if (i != 0x00 && i != 0x08 && i != 0x0E && !handlers[i])
             continue;
         uint32_t off = e[i].offset_low | ((uint32_t)e[i].offset_high << 16);
-        printk("%02x:%08x %s%c", i, off, handlers[i] ? "C" : "-",
-               (++shown % 5) ? ' ' : '\n');
+        printk("%02x   %08x  %02x    %s\n", i, off, e[i].type_attr,
+               handlers[i] ? "C callback" : "panic");
+        shown++;
     }
-    printk("\n(C = C handler registered, DPL3 only on 0x80)\n");
+    printk("(0x8E = DPL0 interrupt gate, 0xEE = DPL3; %d listed)\n", shown);
 }

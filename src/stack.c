@@ -14,6 +14,8 @@ extern uint8_t stack_bottom[];
 extern uint8_t stack_top[];
 extern void _start(void);
 extern void isr_common(void);
+extern void int_trigger(void);
+extern void cpu_halt_clean(void);
 void kernel_main(void);
 
 struct ksym {
@@ -32,6 +34,8 @@ static const struct ksym ksyms[] = {
     { (uint32_t)isr_common, "isr_common" },
     { (uint32_t)interrupt_dispatch, "interrupt_dispatch" },
     { (uint32_t)panic, "panic" },
+    { (uint32_t)cpu_halt_clean, "cpu_halt_clean" },
+    { (uint32_t)int_trigger, "int_trigger" },
     { (uint32_t)signal_raise, "signal_raise" },
     { (uint32_t)signal_process, "signal_process" },
 };
@@ -39,7 +43,8 @@ static const struct ksym ksyms[] = {
 /* Last snapshot taken by stack_save(), kept for post-mortem. */
 static struct stack_snapshot saved;
 
-static const char *sym(uint32_t address, uint32_t *offset)
+/* Name of the closest known function at or below address. */
+const char *stack_symbol(uint32_t address, uint32_t *offset)
 {
     const struct ksym *best = 0;
 
@@ -71,7 +76,7 @@ void print_stack_trace(uint32_t ebp, uint32_t esp, int max_depth)
          (uint32_t)frame + 8 <= top && depth < max_depth; depth++) {
         uint32_t offset;
         printk("  #%d %s+0x%x (ret %08x)\n", depth,
-               sym(frame->ret, &offset), offset, frame->ret);
+               stack_symbol(frame->ret, &offset), offset, frame->ret);
         frame = frame->ebp;
     }
 }

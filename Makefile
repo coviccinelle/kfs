@@ -64,10 +64,13 @@ clean:
 	$(RM) boot.o 
 	$(RM) $(OBJFILES)
 	$(RM) myos.bin
-	$(RM) myos.iso
 	$(RM) -r isodir
 
-re: clean all
+# myos.iso is the delivered image: only fclean removes it
+fclean: clean
+	$(RM) myos.iso
+
+re: fclean all
 
 start: myos.bin
 	qemu-system-i386 -kernel myos.bin
@@ -80,4 +83,4 @@ todolist:
 
 -include $(DEPFILES)
 
-.PHONY: all clean re start start-iso
+.PHONY: all clean fclean re start start-iso

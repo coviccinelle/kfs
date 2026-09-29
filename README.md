@@ -13,10 +13,14 @@ curl -L "$url" -o .local/grub/grub2-pc-modules.rpm
 rpm2cpio .local/grub/grub2-pc-modules.rpm | cpio -idm --quiet -D .local/grub
 ```
 
-Run the kernel directly with QEMU:
+Build and run:
 
 ```sh
-make start (-iso?)
+make            # myos.bin + myos.iso (the delivered image)
+make start      # qemu-system-i386 -kernel myos.bin
+make start-iso  # boot the ISO through GRUB
+make clean      # objects and myos.bin; myos.iso is kept
+make fclean     # also removes myos.iso (make re = fclean all)
 ```
 
 
@@ -30,19 +34,20 @@ buffer, delivers pending signals, then sleeps with `sti; hlt`.
 
 ### How an interrupt travels
 ```
-CPU ──IDT[n]──> isrN (isr_stubs.s)   push err_code(0) + n
+CPU ──IDT[n]──> isrN (isr_stubs.s)   push err_code(0 if the CPU did not) + n
             └─> isr_common           pusha, ds, load kernel segments
                 └─> interrupt_dispatch(struct regs *)   (idt.c)
                      ├ 0x20-0x2F IRQ  -> registered handler, then PIC EOI
                      ├ handler registered -> call it (int3, int 0x80...)
-                     └ other exception    -> panic_regs()
+                     ├ other exception    -> panic_regs()
+                     └ other vector       -> "unhandled interrupt 0xNN"
             <── popa, iret
 ```
 
 | File | Role |
 |---|---|
-| `src/isr_stubs.s` | 49 entry stubs (0-47, 0x80), common save/restore, `cpu_halt_clean` |
-| `src/idt.c` | 256-entry IDT, `idt_set_gate`, `register_interrupt_handler`, dispatcher, `idt` command |
+| `src/isr_stubs.s` | 256 entry stubs, common save/restore, `panic` entry, `cpu_halt_clean`, `int_trigger` table |
+| `src/idt.c` | 256-entry IDT (all present, 0x80 is DPL3), `idt_set_gate`, `register_interrupt_handler`, dispatcher, `idt` command |
 | `src/pic.c` | 8259 remap (IRQ 0-15 → 0x20-0x2F), mask/unmask, EOI, spurious IRQ check |
 | `src/timer.c` | PIT at 100 Hz, `timer_ticks`, `timer_sleep` |
 | `src/keyboard.c` | IRQ1 pushes scancodes into a ring buffer; main loop processes them; Ctrl+C → SIGINT |
@@ -56,15 +61,28 @@ CPU ──IDT[n]──> isrN (isr_stubs.s)   push err_code(0) + n
 - `signal_raise(sig)` delivers now; `signal_schedule(sig)` marks it pending;
   `signal_schedule_in(sig, ticks)` delivers after a delay (timer IRQ)
 - Pending signals are delivered by `signal_process()` from the main loop, never
-  inside an IRQ handler.
+  inside an interrupt or exception handler (int3 only schedules SIGTRAP).
 - Default actions: SIGTERM → graceful halt, SIGKILL/SIGSEGV/SIGFPE/... → panic,
   others → "ignored" message.
 
 ### Panic / halt
+0. `panic()` is written in assembly: it saves EFLAGS, CS, EIP and `pusha`
+   before any C code runs, so it reports the caller's real registers. It
+   builds the same `struct regs` as an interrupt and calls `panic_regs()`.
 1. `cli`  2. `stack_save()` copies ESP..stack_top into a static snapshot
 3. prints reason, exception, registers, saved stack and call trace
-4. `cpu_halt_clean()` zeroes EAX..EBP and EFLAGS, resets ESP, `hlt` forever.
+   (starting with the function EIP points into)
+4. `cpu_halt_clean()` zeroes EAX..EBP, resets ESP, sets EFLAGS to 0x2
+   (bit 1 is reserved, IF cleared), then `hlt` forever.
 
 ### Shell commands to try
-`idt`, `uptime`, `int3`, `syscall`, `kill 10`, `alarm 2`, Ctrl+C,
-`kill 15` (graceful), `kill 9`, `div0`, `gpf`, `panic`, `halt`.
+`idt`, `gdt`, `uptime`, `int3`, `syscall`, `kill 10`, `alarm 2`, Ctrl+C,
+`int 0x30` / `int 255` (software interrupt, returns to the shell),
+`kill 15` (graceful), `kill 9`, `div0`, `gpf`, `ud2`, `into`, `int 0`,
+`panic`, `halt`.
+
+`int N` refuses vectors 8, 10-14, 17, 21, 29 and 30: the CPU pushes an
+error code for those exceptions, but a software `int` never does, so the
+stub would read a shifted stack. Use `div0`, `gpf`, `ud2` or `into` to
+raise real exceptions instead. `int 0x21` runs the keyboard handler
+without a key press: it re-reads the last scancode from port 0x60.

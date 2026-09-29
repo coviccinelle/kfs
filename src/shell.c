@@ -43,7 +43,8 @@ static void cmd_help(void)
     printk("  kill N - schedule signal N (2 INT,10 USR1,14 ALRM,15 TERM)\n");
     printk("  alarm S [N] - schedule signal N (default 14) in S seconds\n");
     printk("  syscall - write through int 0x80\n");
-    printk("  int3 / div0 / gpf - trigger an exception\n");
+    printk("  int3 / div0 / gpf / ud2 / into - trigger an exception\n");
+    printk("  int N  - raise software interrupt N (0-255, 0x hex ok)\n");
     printk("  panic  - kernel panic (stack saved, registers cleaned)\n");
     printk("  clear  - clear the screen\n");
     printk("  reboot - restart the machine\n");
@@ -98,17 +99,39 @@ static int starts_with(const char *s, const char *prefix)
     return 1;
 }
 
-/* Parse an unsigned decimal number, move *s past it. -1 if none. */
+static int hex_digit(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Parse an unsigned number, decimal or 0x-prefixed hex, move *s past it.
+   -1 if none or if it does not fit in 16 bits. */
 static int parse_uint(const char **s)
 {
     int n = 0;
 
     while (**s == ' ')
         (*s)++;
+    if ((*s)[0] == '0' && ((*s)[1] == 'x' || (*s)[1] == 'X')
+        && hex_digit((*s)[2]) >= 0) {
+        *s += 2;
+        while (hex_digit(**s) >= 0) {
+            n = n * 16 + hex_digit(*(*s)++);
+            if (n > 0xFFFF)
+                return -1;
+        }
+        return n;
+    }
     if (**s < '0' || **s > '9')
         return -1;
-    while (**s >= '0' && **s <= '9')
+    while (**s >= '0' && **s <= '9') {
         n = n * 10 + (*(*s)++ - '0');
+        if (n > 0xFFFF)
+            return -1;
+    }
     return n;
 }
 
@@ -162,6 +185,45 @@ static void cmd_gpf(void)
     __asm__ volatile ("movw $0x80, %%ax; movw %%ax, %%ds" : : : "ax");
 }
 
+static void cmd_ud2(void)
+{
+    __asm__ volatile ("ud2");           /* #UD, vector 0x06 */
+}
+
+static void cmd_into(void)
+{
+    /* 0x7fffffff + 1 overflows a signed int: OF=1, so into raises #OF. */
+    __asm__ volatile ("movl $0x7fffffff, %%eax; addl $1, %%eax; into"
+                      : : : "eax", "cc");
+}
+
+/* "int $n; ret" x 256, 4 bytes each (isr_stubs.s) */
+extern void int_trigger(void);
+
+/*
+Raise any software interrupt. Vectors where the CPU pushes an error code
+are refused: a software int never pushes one, so the stub would read
+a wrong stack layout (a known x86 limitation, not a kernel bug).
+*/
+static void cmd_int(const char *arg)
+{
+    int n = parse_uint(&arg);
+
+    if (n < 0 || n > 255) {
+        printk("usage: int <0-255> (decimal or 0x hex)\n");
+        return;
+    }
+    if (n == 8 || (n >= 10 && n <= 14) || n == 17 || n == 21
+        || n == 29 || n == 30) {
+        printk("vector 0x%02x expects a CPU error code; use div0, gpf, "
+               "ud2 or into to raise a real exception\n", n);
+        return;
+    }
+    printk("int 0x%02x\n", n);
+    ((void (*)(void))((uint32_t)int_trigger + (uint32_t)n * 4))();
+    printk("back from int 0x%02x\n", n);
+}
+
 void shell_run_command(const char *cmd)
 {
     if (cmd[0] == '\0')              return;   /* ignore empty line */
@@ -177,6 +239,9 @@ void shell_run_command(const char *cmd)
     else if (!strcmp(cmd, "int3"))   __asm__ volatile ("int3");
     else if (!strcmp(cmd, "div0"))   cmd_div0();
     else if (!strcmp(cmd, "gpf"))    cmd_gpf();
+    else if (!strcmp(cmd, "ud2"))    cmd_ud2();
+    else if (!strcmp(cmd, "into"))   cmd_into();
+    else if (starts_with(cmd, "int ")) cmd_int(cmd + 4);
     else if (!strcmp(cmd, "panic"))  panic("panic requested from the shell");
     else if (!strcmp(cmd, "clear"))  terminal_clear();
     else if (!strcmp(cmd, "reboot")) cmd_reboot();

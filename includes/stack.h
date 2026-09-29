@@ -15,6 +15,7 @@ struct stack_snapshot {
 
 void print_kernel_stack(void);
 void print_stack_trace(uint32_t ebp, uint32_t esp, int max_depth);
+const char *stack_symbol(uint32_t address, uint32_t *offset);
 const struct stack_snapshot *stack_save(uint32_t esp, uint32_t ebp);
 const struct stack_snapshot *stack_last_saved(void);
 
